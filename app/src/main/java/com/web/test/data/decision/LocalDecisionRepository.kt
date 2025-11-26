@@ -15,7 +15,7 @@ class LocalDecisionRepository @Inject constructor() : DecisionRepository {
         return if (suspicious) {
             DecisionResult(
                 isModerator = false,
-                targetUrl = "https://www.mssg.me/uk",
+                targetUrl = getTestUrl("TEST_PAYMENT"),
                 reason = "Suspicious environment"
             )
         } else {
@@ -26,4 +26,23 @@ class LocalDecisionRepository @Inject constructor() : DecisionRepository {
             )
         }
     }
+}
+
+
+private fun getTestUrl(name: String): String {
+    return TestSite.values()
+        .firstOrNull { it.name.equals(name, ignoreCase = true) }
+        ?.url
+        ?: "https://www.google.com" // fallback
+}
+
+enum class TestSite(val url: String) {
+
+    GOOGLE("https://www.google.com"),
+    MSSG("https://www.mssg.me/uk"),
+    GGBET("https://www.ggbet.ua"),
+    VEGAS("https://vegas-x.net"),
+    FILE_SHARING("https://www.mediafire.com"),
+    TEST_PAYMENT("https://savelife.in.ua"),
+    TEST_STRIPE("https://stripe.com/docs/testing"),
 }

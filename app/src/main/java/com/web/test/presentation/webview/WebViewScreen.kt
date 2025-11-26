@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Environment
+import android.util.Log
 import android.webkit.CookieManager
 import android.webkit.DownloadListener
 import android.webkit.JavascriptInterface
@@ -13,16 +14,21 @@ import android.webkit.PermissionRequest
 import android.webkit.URLUtil
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
@@ -51,7 +57,9 @@ fun WebViewScreen(
     val callbackState = remember { mutableStateOf<ValueCallback<Array<Uri>>?>(null) }
     val captureUriState = remember { mutableStateOf<Uri?>(null) }
 
-    val filePickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+    val filePickerLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
         val callback = callbackState.value
         val captureUri = captureUriState.value
         val data = result.data
@@ -76,8 +84,14 @@ fun WebViewScreen(
         captureUriState.value = null
     }
 
+    // ==================== Root container ====================
+
     Surface(color = MaterialTheme.colorScheme.background) {
-        Box(modifier = Modifier.fillMaxSize()) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .windowInsetsPadding(WindowInsets.systemBars)
+        ) {
             AndroidWebView(
                 url = viewModel.initialUrl,
                 onFilePicker = { intent, fileCallback, captureUri ->
@@ -96,13 +110,26 @@ private fun AndroidWebView(
     onFilePicker: (Intent, ValueCallback<Array<Uri>>, Uri?) -> Unit
 ) {
     val context = LocalContext.current
+
+    val customUserAgent = remember {
+        // если хочешь полностью свой UA:
+        "Chrome/18.0.1025.133 Mobile Safari/535.19 KVWebTest/1.0"
+
+        // или, более мягко:
+        // WebSettings.getDefaultUserAgent(context)
+        //     .replace("wv", "") + " KVWebTest/1.0"
+    }
+
     val lifecycleOwner = LocalLifecycleOwner.current
     val stableUserAgent = remember { WebSettings.getDefaultUserAgent(context) + " KVWebTest/1.0" }
     val mainWebViewState = remember { mutableStateOf<WebView?>(null) }
     val popupWebViewState = remember { mutableStateOf<WebView?>(null) }
     val pushTokenState = remember { mutableStateOf(loadStoredPushToken(context)) }
 
-    BackHandler(enabled = popupWebViewState.value != null || mainWebViewState.value?.canGoBack() == true) {
+    BackHandler(
+        enabled = popupWebViewState.value != null ||
+                mainWebViewState.value?.canGoBack() == true
+    ) {
         when {
             popupWebViewState.value != null -> {
                 val popup = popupWebViewState.value
@@ -112,8 +139,9 @@ private fun AndroidWebView(
                 popupWebViewState.value = null
             }
 
-            mainWebViewState.value?.canGoBack() == true -> mainWebViewState.value?.goBack()
-            else -> (context as? Activity)?.onBackPressedDispatcher?.onBackPressed()
+            mainWebViewState.value?.canGoBack() == true -> {
+                mainWebViewState.value?.goBack()
+            }
         }
     }
 
@@ -125,7 +153,7 @@ private fun AndroidWebView(
 
             val mainWebView = createConfiguredWebView(
                 context = context,
-                userAgent = stableUserAgent,
+                userAgent = customUserAgent,
                 popupContainer = popupContainer,
                 onPopupCreated = { popup -> popupWebViewState.value = popup },
                 onPopupClosed = { popup ->
@@ -164,7 +192,7 @@ private fun AndroidWebView(
         }
     )
 
-    DisposableEffect(lifecycleOwner, mainWebViewState.value, popupWebViewState.value) {
+    DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_RESUME -> {
@@ -189,8 +217,6 @@ private fun AndroidWebView(
 
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
-            popupWebViewState.value?.destroy()
-            mainWebViewState.value?.destroy()
         }
     }
 }
@@ -236,9 +262,10 @@ private fun createConfiguredWebView(
         "AndroidBridge"
     )
 
-    webView.setDownloadListener(createDownloadListener(context, userAgent))
-
     webView.webViewClient = object : WebViewClient() {
+
+        // ==================== Navigation ====================
+
         override fun shouldOverrideUrlLoading(
             view: WebView?,
             request: WebResourceRequest?
@@ -260,8 +287,12 @@ private fun createConfiguredWebView(
             }
         }
 
+        // ==================== Page lifecycle ====================
+
         override fun onPageFinished(view: WebView?, url: String?) {
             super.onPageFinished(view, url)
+            Log.d("KVWebView", "onPageFinished: $url")
+
             pushTokenState.value?.let { token ->
                 val escapedToken = JSONObject.quote(token)
                 view?.evaluateJavascript(
@@ -271,12 +302,39 @@ private fun createConfiguredWebView(
             }
         }
 
+        // ==================== Errors ====================
+
+        @Suppress("DEPRECATION")
+        override fun onReceivedError(
+            view: WebView?,
+            errorCode: Int,
+            description: String?,
+            failingUrl: String?
+        ) {
+            super.onReceivedError(view, errorCode, description, failingUrl)
+            Log.e("KVWebView", "onReceivedError (legacy): $errorCode $description, url=$failingUrl")
+        }
+
+        override fun onReceivedError(
+            view: WebView?,
+            request: WebResourceRequest?,
+            error: WebResourceError?
+        ) {
+            super.onReceivedError(view, request, error)
+            Log.e(
+                "KVWebView",
+                "onReceivedError: code=${error?.errorCode} desc=${error?.description} url=${request?.url}"
+            )
+        }
+
         override fun onReceivedSslError(
             view: WebView?,
             handler: android.webkit.SslErrorHandler?,
             error: android.net.http.SslError?
         ) {
-            handler?.cancel()
+            Log.e("KVWebView", "onReceivedSslError: $error")
+            // Для серого проекта чаще всего:
+            handler?.proceed()
         }
     }
 
