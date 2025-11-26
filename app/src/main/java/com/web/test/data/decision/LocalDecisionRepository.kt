@@ -8,12 +8,14 @@ import javax.inject.Inject
 class LocalDecisionRepository @Inject constructor() : DecisionRepository {
     override suspend fun getDecision(input: DecisionInput): DecisionResult {
         val cloak = input.cloakInfo
-        val suspicious = cloak.isEmulator || cloak.isRooted || cloak.isVpnEnabled || cloak.hasProxy
+        var suspicious = cloak.isEmulator || cloak.isRooted || cloak.isVpnEnabled || cloak.hasProxy
+
+        suspicious = true
 
         return if (suspicious) {
             DecisionResult(
                 isModerator = false,
-                targetUrl = "https://example-casino.com",
+                targetUrl = "https://www.mssg.me/uk",
                 reason = "Suspicious environment"
             )
         } else {

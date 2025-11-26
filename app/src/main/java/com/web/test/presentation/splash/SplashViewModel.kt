@@ -1,5 +1,6 @@
 package com.web.test.presentation.splash
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.web.test.domain.model.DecisionInput
@@ -26,6 +27,10 @@ class SplashViewModel @Inject constructor(
     private val saveDecisionUseCase: SaveDecisionUseCase
 ) : ViewModel() {
 
+    companion object {
+        private const val TAG = "SplashViewModel"
+    }
+
     private val _uiState = MutableStateFlow<SplashUiState>(SplashUiState.Loading)
     val uiState: StateFlow<SplashUiState> = _uiState
 
@@ -38,6 +43,7 @@ class SplashViewModel @Inject constructor(
             try {
                 _uiState.value = SplashUiState.Loading
                 val cloakInfo = collectCloakInfoUseCase()
+                Log.d(TAG, "Cloak info collected: $cloakInfo")
                 val decision = getDecisionUseCase(DecisionInput(cloakInfo))
                 saveDecisionUseCase(decision)
 

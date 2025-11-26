@@ -75,9 +75,11 @@ private fun AndroidWebView(
         modifier = Modifier.fillMaxSize(),
         factory = {
             WebView(context).apply {
+                val webView = this
+
                 CookieManager.getInstance().apply {
                     setAcceptCookie(true)
-                    setAcceptThirdPartyCookies(this@apply, true)
+                    setAcceptThirdPartyCookies(webView, true)
                 }
 
                 settings.javaScriptEnabled = true
