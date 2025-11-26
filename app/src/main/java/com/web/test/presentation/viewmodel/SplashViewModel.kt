@@ -1,5 +1,6 @@
 package com.web.test.presentation.viewmodel
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.web.test.domain.model.DecisionInput
@@ -26,6 +27,10 @@ class SplashViewModel @Inject constructor(
     private val saveDecisionUseCase: SaveDecisionUseCase,
 ) : ViewModel() {
 
+    companion object {
+        private const val TAG = "SplashViewModel"
+    }
+
     private val _uiState: MutableStateFlow<SplashUiState> = MutableStateFlow(SplashUiState.Loading)
     val uiState: StateFlow<SplashUiState> = _uiState
 
@@ -34,14 +39,17 @@ class SplashViewModel @Inject constructor(
             _uiState.value = SplashUiState.Loading
             runCatching {
                 val cloakInfo = collectCloakInfoUseCase()
+                Log.d(TAG, "Collected cloak info: $cloakInfo")
                 val decision = getDecisionUseCase(DecisionInput(cloakInfo))
+                Log.d(TAG, "Received decision: $decision")
                 saveDecisionUseCase(decision, System.currentTimeMillis())
                 decision
             }.onSuccess { decision ->
                 if (decision.isModerator) {
                     _uiState.value = SplashUiState.NavigateToModerator
                 } else {
-                    val target = decision.targetUrl
+                    val target = decision.targetUrl?.trim()
+                    Log.d(TAG, "Navigating to target url: $target")
                     if (target.isNullOrBlank()) {
                         _uiState.value = SplashUiState.Error("Missing target url")
                     } else {
