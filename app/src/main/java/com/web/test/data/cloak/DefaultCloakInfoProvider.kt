@@ -1,6 +1,7 @@
 package com.web.test.data.cloak
 
 import android.content.Context
+import android.util.Log
 import com.web.test.domain.model.CloakInfo
 import com.web.test.domain.repository.CloakInfoProvider
 
@@ -15,6 +16,10 @@ class DefaultCloakInfoProvider(
     private val deviceInfoDataSource: DeviceInfoDataSource,
     private val networkInfoDataSource: NetworkInfoDataSource,
 ) : CloakInfoProvider {
+
+    companion object {
+        private const val TAG = "DefaultCloakInfoProvider"
+    }
 
     override suspend fun collect(): CloakInfo {
         val isRooted = rootChecker.isRooted()
@@ -33,7 +38,7 @@ class DefaultCloakInfoProvider(
         val isPlayStoreInstall = deviceInfoDataSource.isPlayStoreInstall()
         val networkType = networkInfoDataSource.networkType()
 
-        return CloakInfo(
+        val cloakInfo = CloakInfo(
             isRooted = isRooted,
             isEmulator = isEmulator,
             isUsbDebuggingEnabled = isUsbDebuggingEnabled,
@@ -50,5 +55,8 @@ class DefaultCloakInfoProvider(
             isPlayStoreInstall = isPlayStoreInstall,
             networkType = networkType,
         )
+
+        Log.i(TAG, "Cloak info collected: $cloakInfo")
+        return cloakInfo
     }
 }

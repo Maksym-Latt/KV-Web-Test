@@ -24,9 +24,16 @@ fun AppNavHost(
     startUrl: String? = null,
     modifier: Modifier = Modifier,
 ) {
+    val webViewRoute = "${AppDestinations.WebView}/{url}"
+    val initialDestination = if (startDestination == AppDestinations.WebView && !startUrl.isNullOrBlank()) {
+        "${AppDestinations.WebView}/$startUrl"
+    } else {
+        startDestination
+    }
+
     NavHost(
         navController = navController,
-        startDestination = startDestination,
+        startDestination = initialDestination,
         modifier = modifier,
     ) {
         composable(AppDestinations.Splash) {
@@ -49,7 +56,7 @@ fun AppNavHost(
             GameScreen()
         }
         composable(
-            route = "${AppDestinations.WebView}/{url}",
+            route = webViewRoute,
             arguments = listOf(
                 navArgument("url") {
                     type = NavType.StringType
