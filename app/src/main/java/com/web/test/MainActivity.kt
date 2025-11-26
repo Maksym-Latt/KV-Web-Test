@@ -1,47 +1,68 @@
 package com.web.test
 
 import android.os.Bundle
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.tooling.preview.Preview
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.navigation.compose.rememberNavController
+import com.web.test.presentation.navigation.AppDestinations
+import com.web.test.presentation.navigation.AppNavHost
+import com.web.test.presentation.viewmodel.AppEntryState
+import com.web.test.presentation.viewmodel.AppEntryViewModel
 import com.web.test.ui.theme.WebTestTheme
+import dagger.hilt.android.AndroidEntryPoint
+import androidx.compose.runtime.collectAsState
+import android.net.Uri
 
+@AndroidEntryPoint
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+
         setContent {
             WebTestTheme {
-                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    Greeting(
-                        name = "Android",
-                        modifier = Modifier.padding(innerPadding)
-                    )
-                }
+                val viewModel: AppEntryViewModel = hiltViewModel()
+                val state by viewModel.state.collectAsState()
+                AppContent(state = state)
             }
         }
     }
 }
 
 @Composable
-fun Greeting(name: String, modifier: Modifier = Modifier) {
-    Text(
-        text = "Hello $name!",
-        modifier = modifier
-    )
-}
+private fun AppContent(state: AppEntryState) {
+    when (state) {
+        AppEntryState.Loading -> {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator()
+            }
+        }
 
-@Preview(showBackground = true)
-@Composable
-fun GreetingPreview() {
-    WebTestTheme {
-        Greeting("Android")
+        is AppEntryState.CachedWeb -> {
+            val navController = rememberNavController()
+            AppNavHost(
+                navController = navController,
+                startDestination = AppDestinations.WebView,
+                startUrl = Uri.encode(state.url),
+            )
+        }
+
+        AppEntryState.Splash -> {
+            val navController = rememberNavController()
+            AppNavHost(
+                navController = navController,
+                startDestination = AppDestinations.Splash,
+            )
+        }
     }
 }
