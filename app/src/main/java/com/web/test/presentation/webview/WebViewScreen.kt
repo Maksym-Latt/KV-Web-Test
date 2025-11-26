@@ -57,6 +57,9 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import java.io.File
 import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
+import java.net.URLDecoder
 
 @Composable
 fun WebViewScreen(
@@ -775,38 +778,110 @@ private fun createFilePickerIntent(fileChooserParams: WebChromeClient.FileChoose
     }
 }
 
+// ==================== Download listener ====================
+
 private fun createDownloadListener(
     context: Context,
     userAgent: String
 ): DownloadListener {
     return DownloadListener { url, ua, contentDisposition, mimeType, _ ->
 
-        val fileName = URLUtil.guessFileName(url, contentDisposition, mimeType)
+        Thread {
+            var finalFileName = URLUtil.guessFileName(url, contentDisposition, mimeType)
+            var finalMimeType = mimeType
 
-        try {
-            val request = DownloadManager.Request(Uri.parse(url)).apply {
-                addRequestHeader("User-Agent", ua ?: userAgent)
-                setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                setMimeType(mimeType)
-                setAllowedOverMetered(true)
-                setAllowedOverRoaming(true)
+            try {
+                val connection = (URL(url).openConnection() as HttpURLConnection).apply {
+                    requestMethod = "HEAD"
+                    connectTimeout = 5000
+                    readTimeout = 5000
+                }
 
-                setDestinationInExternalPublicDir(
-                    Environment.DIRECTORY_DOWNLOADS,
-                    fileName
-                )
+                connection.connect()
+
+                val headDisposition = connection.getHeaderField("Content-Disposition")
+                val headMime = connection.contentType
+
+                val fileNameFromHead = getFileNameFromContentDisposition(headDisposition)
+                if (!fileNameFromHead.isNullOrBlank()) {
+                    finalFileName = fileNameFromHead
+                } else {
+                    finalFileName = URLUtil.guessFileName(
+                        url,
+                        headDisposition ?: contentDisposition,
+                        headMime ?: mimeType
+                    )
+                }
+
+                if (!headMime.isNullOrBlank()) {
+                    finalMimeType = headMime
+                }
+
+                connection.disconnect()
+            } catch (_: Exception) {
+                // fallback оставляем как есть
             }
 
-            val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-            dm.enqueue(request)
+            val activity = context as? Activity ?: return@Thread
 
-            Toast.makeText(context, "Downloading…", Toast.LENGTH_SHORT).show()
+            activity.runOnUiThread {
+                AlertDialog.Builder(context)
+                    .setTitle("Download file")
+                    .setMessage("Download $finalFileName?")
+                    .setPositiveButton("Download") { _, _ ->
+                        try {
+                            val request = DownloadManager.Request(Uri.parse(url)).apply {
+                                addRequestHeader("User-Agent", ua ?: userAgent)
+                                setNotificationVisibility(
+                                    DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED
+                                )
+                                setMimeType(finalMimeType)
+                                setAllowedOverMetered(true)
+                                setAllowedOverRoaming(true)
 
-        } catch (e: Exception) {
-            Toast.makeText(context, "Download failed", Toast.LENGTH_LONG).show()
-        }
+                                setDestinationInExternalPublicDir(
+                                    Environment.DIRECTORY_DOWNLOADS,
+                                    finalFileName
+                                )
+                            }
+
+                            val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+                            dm.enqueue(request)
+
+                            Toast.makeText(context, "Downloading…", Toast.LENGTH_SHORT).show()
+                        } catch (_: Exception) {
+                            Toast.makeText(context, "Download failed", Toast.LENGTH_LONG).show()
+                        }
+                    }
+                    .setNegativeButton(android.R.string.cancel, null)
+                    .show()
+            }
+        }.start()
     }
 }
+
+// ==================== Download filename utils ====================
+
+private fun getFileNameFromContentDisposition(
+    contentDisposition: String?
+): String? {
+    if (contentDisposition.isNullOrBlank()) return null
+
+    val utf8Regex = Regex("filename\\*=UTF-8''([^;]+)")
+    val utf8Match = utf8Regex.find(contentDisposition)
+    if (utf8Match != null) {
+        return try {
+            URLDecoder.decode(utf8Match.groupValues[1], "UTF-8")
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    val fallbackRegex = Regex("filename=\"?([^\";]+)\"?")
+    val fallbackMatch = fallbackRegex.find(contentDisposition)
+    return fallbackMatch?.groupValues?.getOrNull(1)
+}
+
 
 
 private class WebAppBridge(
