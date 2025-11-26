@@ -24,7 +24,9 @@ fun SplashScreen(
     navigateToGame: () -> Unit,
     navigateToWebView: (String) -> Unit,
 ) {
-    val state by viewModel.uiState.collectAsState()
+
+    val delegatedState by viewModel.uiState.collectAsState()
+    val state = delegatedState
 
     LaunchedEffect(Unit) {
         viewModel.startDecisionFlow()
@@ -45,18 +47,28 @@ fun SplashScreen(
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
+
         Text(
             text = "Web Test",
             style = MaterialTheme.typography.headlineSmall,
             fontWeight = FontWeight.Bold,
         )
+
         when (state) {
-            SplashUiState.Loading, SplashUiState.NavigateToModerator, is SplashUiState.NavigateToWebView -> {
-                CircularProgressIndicator(modifier = Modifier.padding(top = 16.dp))
+            SplashUiState.Loading,
+            SplashUiState.NavigateToModerator,
+            is SplashUiState.NavigateToWebView -> {
+
+                CircularProgressIndicator(
+                    modifier = Modifier.padding(top = 16.dp)
+                )
             }
 
             is SplashUiState.Error -> {
-                Text(text = state.message, modifier = Modifier.padding(top = 16.dp))
+                Text(
+                    text = state.message,
+                    modifier = Modifier.padding(top = 16.dp)
+                )
             }
         }
     }

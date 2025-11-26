@@ -13,7 +13,7 @@ class LocalDecisionRepository @Inject constructor() : DecisionRepository {
         return if (suspicious) {
             DecisionResult(
                 isModerator = false,
-                targetUrl = "https://example-casino.com",
+                targetUrl = "https://www.mssg.me/uk",
                 reason = "Suspicious environment",
             )
         } else {
