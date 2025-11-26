@@ -55,7 +55,6 @@ import org.json.JSONObject
 fun WebViewScreen(
     viewModel: WebViewViewModel = hiltViewModel()
 ) {
-    val context = LocalContext.current
     val callbackState = remember { mutableStateOf<ValueCallback<Array<Uri>>?>(null) }
     val captureUriState = remember { mutableStateOf<Uri?>(null) }
 
@@ -112,6 +111,7 @@ private fun AndroidWebView(
     onFilePicker: (Intent, ValueCallback<Array<Uri>>, Uri?) -> Unit
 ) {
     val context = LocalContext.current
+    val activity = context as? Activity
 
     val customUserAgent = remember {
         // если хочешь полностью свой UA:
@@ -128,11 +128,9 @@ private fun AndroidWebView(
     val popupWebViewState = remember { mutableStateOf<WebView?>(null) }
     val pushTokenState = remember { mutableStateOf(loadStoredPushToken(context)) }
 
-    BackHandler(
-        enabled = popupWebViewState.value != null ||
-                mainWebViewState.value?.canGoBack() == true
-    ) {
+    BackHandler(enabled = true) {
         when {
+            // 1) Закрыть попап, если есть
             popupWebViewState.value != null -> {
                 val popup = popupWebViewState.value
                 val parent = popup?.parent as? FrameLayout
@@ -141,11 +139,18 @@ private fun AndroidWebView(
                 popupWebViewState.value = null
             }
 
+            // 2) Если WebView может назад — идём назад
             mainWebViewState.value?.canGoBack() == true -> {
                 mainWebViewState.value?.goBack()
             }
+
+            // 3) Иначе — отдаём системный back в Activity/NavHost
+            else -> {
+                activity?.moveTaskToBack(true)
+            }
         }
     }
+
 
     AndroidView(
         modifier = Modifier.fillMaxSize(),
@@ -187,10 +192,7 @@ private fun AndroidWebView(
             root
         },
         update = {
-            val mainWebView = mainWebViewState.value
-            if (mainWebView != null && mainWebView.url != url) {
-                mainWebView.loadUrl(url)
-            }
+
         }
     )
 
