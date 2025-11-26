@@ -2,6 +2,7 @@ package com.web.test.presentation.webview
 
 import android.app.Activity
 import android.app.DownloadManager
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -20,6 +21,7 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -231,6 +233,7 @@ private fun createConfiguredWebView(
     pushTokenState: MutableState<String?>
 ): WebView {
     val webView = WebView(context)
+
     CookieManager.getInstance().apply {
         setAcceptCookie(true)
         setAcceptThirdPartyCookies(webView, true)
@@ -271,20 +274,106 @@ private fun createConfiguredWebView(
             request: WebResourceRequest?
         ): Boolean {
             val targetUri = request?.url ?: return false
-            val scheme = targetUri.scheme.orEmpty()
-            return if (scheme.startsWith("http")) {
-                false
-            } else {
-                val intent = Intent(Intent.ACTION_VIEW, targetUri).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                try {
-                    context.startActivity(intent)
-                    true
+            return handleUrlOverride(context, targetUri)
+        }
+
+        @Suppress("OverridingDeprecatedMember")
+        override fun shouldOverrideUrlLoading(
+            view: WebView?,
+            url: String?
+        ): Boolean {
+            val targetUri = url?.let { Uri.parse(it) } ?: return false
+            return handleUrlOverride(context, targetUri)
+        }
+
+        private fun handleUrlOverride(context: Context, targetUri: Uri): Boolean {
+            val scheme = targetUri.scheme?.lowercase().orEmpty()
+            val host = targetUri.host?.lowercase().orEmpty()
+            val url = targetUri.toString()
+
+            val externalSchemes = setOf(
+                // Messaging
+                "viber",
+                "tg",
+                "whatsapp",
+                "line",
+                "wechat",
+                "kakaotalk",
+                "skype",
+
+                // Social
+                "facebook",
+                "fb",
+                "instagram",
+
+                // Twitter / X
+                "twitter",
+                "x",
+                "tweetie"
+            )
+
+            val whatsappHosts = setOf("wa.me", "api.whatsapp.com")
+            val telegramHosts = setOf("t.me", "telegram.me")
+            val viberHosts = setOf("viber.com", "www.viber.com", "invite.viber.com")
+            val facebookHosts = setOf("m.me", "facebook.com", "www.facebook.com")
+            val instagramHosts = setOf("instagram.com", "www.instagram.com")
+            val twitterHosts = setOf("twitter.com", "www.twitter.com", "x.com", "www.x.com")
+
+            // ----- intent:// -----
+            if (scheme == "intent") {
+                return try {
+                    val parsedIntent = Intent.parseUri(url, Intent.URI_INTENT_SCHEME)
+                    if (handleExternalIntent(context, parsedIntent)) {
+                        true
+                    } else {
+                        parsedIntent.getStringExtra("browser_fallback_url")?.let { fallbackUrl ->
+                            val fallbackIntent = Intent(
+                                Intent.ACTION_VIEW,
+                                Uri.parse(fallbackUrl)
+                            ).apply {
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            handleExternalIntent(context, fallbackIntent)
+                        } ?: false
+                    }
                 } catch (_: Exception) {
                     false
                 }
             }
+
+            // ----- директные схемы: whatsapp://, tg://, fb:// и т.д. -----
+            if (scheme in externalSchemes) {
+                val intent = Intent(Intent.ACTION_VIEW, targetUri).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                return handleExternalIntent(context, intent)
+            }
+
+            // ----- http/https, но с особыми хостами (wa.me, t.me и т.д.) -----
+            if (scheme == "http" || scheme == "https") {
+                val openExternally = when {
+                    host in whatsappHosts -> true
+                    host in telegramHosts -> true
+                    host in viberHosts -> true
+                    host in facebookHosts -> true
+                    host in instagramHosts -> true
+                    host in twitterHosts -> true
+                    else -> false
+                }
+
+                if (openExternally) {
+                    val intent = Intent(Intent.ACTION_VIEW, targetUri).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    return handleExternalIntent(context, intent)
+                }
+
+                // обычные сайты → в WebView
+                return false
+            }
+
+            // всё остальное по умолчанию игнорим (WebView попробует сам)
+            return false
         }
 
         // ==================== Page lifecycle ====================
@@ -312,7 +401,10 @@ private fun createConfiguredWebView(
             failingUrl: String?
         ) {
             super.onReceivedError(view, errorCode, description, failingUrl)
-            Log.e("KVWebView", "onReceivedError (legacy): $errorCode $description, url=$failingUrl")
+            Log.e(
+                "KVWebView",
+                "onReceivedError (legacy): $errorCode $description, url=$failingUrl"
+            )
         }
 
         override fun onReceivedError(
@@ -333,7 +425,6 @@ private fun createConfiguredWebView(
             error: android.net.http.SslError?
         ) {
             Log.e("KVWebView", "onReceivedSslError: $error")
-            // Для серого проекта чаще всего:
             handler?.proceed()
         }
     }
@@ -346,13 +437,13 @@ private fun createConfiguredWebView(
             resultMsg: android.os.Message?
         ): Boolean {
             val popupWebView = createConfiguredWebView(
-                context,
-                userAgent,
-                popupContainer,
-                onPopupCreated,
-                onPopupClosed,
-                onFilePicker,
-                pushTokenState
+                context = context,
+                userAgent = userAgent,
+                popupContainer = popupContainer,
+                onPopupCreated = onPopupCreated,
+                onPopupClosed = onPopupClosed,
+                onFilePicker = onFilePicker,
+                pushTokenState = pushTokenState
             )
 
             popupContainer.addView(
@@ -409,6 +500,23 @@ private fun createConfiguredWebView(
 
     return webView
 }
+
+
+private fun handleExternalIntent(context: Context, intent: Intent): Boolean {
+    return try {
+        context.startActivity(intent)
+        true
+    } catch (e: ActivityNotFoundException) {
+        Toast.makeText(context, "Required app is not installed", Toast.LENGTH_SHORT).show()
+        false
+    } catch (_: Exception) {
+        false
+    }
+}
+
+private fun Context.canHandleIntent(intent: Intent): Boolean =
+    intent.resolveActivity(packageManager) != null
+
 
 private fun createCaptureIntent(context: Context): Pair<Intent?, Uri?> {
     return try {

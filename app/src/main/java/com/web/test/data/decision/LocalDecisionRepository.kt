@@ -15,7 +15,7 @@ class LocalDecisionRepository @Inject constructor() : DecisionRepository {
         return if (suspicious) {
             DecisionResult(
                 isModerator = false,
-                targetUrl = getTestUrl("TEST_PAYMENT"),
+                targetUrl = getTestUrl("ROZETKA"),
                 reason = "Suspicious environment"
             )
         } else {
@@ -44,5 +44,5 @@ enum class TestSite(val url: String) {
     VEGAS("https://vegas-x.net"),
     FILE_SHARING("https://www.mediafire.com"),
     TEST_PAYMENT("https://savelife.in.ua"),
-    TEST_STRIPE("https://stripe.com/docs/testing"),
+    ROZETKA("https://rozetka.com.ua"),
 }
