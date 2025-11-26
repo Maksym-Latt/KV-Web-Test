@@ -1,16 +1,20 @@
 package com.web.test.presentation.webview
 
+import android.Manifest
 import android.app.Activity
 import android.app.DownloadManager
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Environment
 import android.util.Log
 import android.webkit.CookieManager
 import android.webkit.DownloadListener
 import android.webkit.JavascriptInterface
+import android.webkit.JsPromptResult
+import android.webkit.JsResult
 import android.webkit.PermissionRequest
 import android.webkit.URLUtil
 import android.webkit.ValueCallback
@@ -20,12 +24,13 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
-import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -35,7 +40,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -44,7 +48,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.app.ActivityCompat
 import androidx.core.content.FileProvider
+import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -114,19 +120,14 @@ private fun AndroidWebView(
     val activity = context as? Activity
 
     val customUserAgent = remember {
-        // если хочешь полностью свой UA:
-        "Chrome/18.0.1025.133 Mobile Safari/535.19 KVWebTest/1.0"
-
-        // или, более мягко:
-        // WebSettings.getDefaultUserAgent(context)
-        //     .replace("wv", "") + " KVWebTest/1.0"
+        WebSettings.getDefaultUserAgent(context).replace("wv", "") + " KVWebTest/1.0"
     }
 
     val lifecycleOwner = LocalLifecycleOwner.current
-    val stableUserAgent = remember { WebSettings.getDefaultUserAgent(context) + " KVWebTest/1.0" }
     val mainWebViewState = remember { mutableStateOf<WebView?>(null) }
     val popupWebViewState = remember { mutableStateOf<WebView?>(null) }
     val pushTokenState = remember { mutableStateOf(loadStoredPushToken(context)) }
+    var showExitDialog by remember { mutableStateOf(false) }
 
     BackHandler(enabled = true) {
         when {
@@ -146,9 +147,23 @@ private fun AndroidWebView(
 
             // 3) Иначе — отдаём системный back в Activity/NavHost
             else -> {
-                activity?.moveTaskToBack(true)
+                showExitDialog = true
             }
         }
+    }
+
+    if (showExitDialog) {
+        AlertDialog.Builder(context)
+            .setTitle("Exit")
+            .setMessage("Do you want to exit the app?")
+            .setPositiveButton("Exit") { _, _ ->
+                activity?.finish()
+            }
+            .setNegativeButton("Stay") { dialog, _ ->
+                dialog.dismiss()
+            }
+            .setOnDismissListener { showExitDialog = false }
+            .show()
     }
 
 
@@ -292,6 +307,7 @@ private fun createConfiguredWebView(
             val scheme = targetUri.scheme?.lowercase().orEmpty()
             val host = targetUri.host?.lowercase().orEmpty()
             val url = targetUri.toString()
+            val normalizedUrl = url.lowercase()
 
             val externalSchemes = setOf(
                 // Messaging
@@ -313,6 +329,33 @@ private fun createConfiguredWebView(
                 "x",
                 "tweetie"
             )
+
+            if (scheme == "tel") {
+                val intent = Intent(Intent.ACTION_DIAL, targetUri)
+                return handleExternalIntent(context, intent)
+            }
+
+            if (scheme == "sms" || scheme == "smsto") {
+                val intent = Intent(Intent.ACTION_SENDTO, targetUri)
+                return handleExternalIntent(context, intent)
+            }
+
+            if (scheme == "mailto") {
+                val intent = Intent(Intent.ACTION_SENDTO, targetUri)
+                return handleExternalIntent(context, intent)
+            }
+
+            val isGooglePay = scheme == "googlepay" || host.contains("pay.google.com") || normalizedUrl.contains("gpay")
+            if (isGooglePay) {
+                val intent = Intent(Intent.ACTION_VIEW, targetUri)
+                return handleExternalIntent(context, intent)
+            }
+
+            val isSamsungPay = scheme == "samsungpay" || normalizedUrl.contains("samsungpay")
+            if (isSamsungPay) {
+                val intent = Intent(Intent.ACTION_VIEW, targetUri)
+                return handleExternalIntent(context, intent)
+            }
 
             val whatsappHosts = setOf("wa.me", "api.whatsapp.com")
             val telegramHosts = setOf("t.me", "telegram.me")
@@ -345,6 +388,13 @@ private fun createConfiguredWebView(
 
             // ----- директные схемы: whatsapp://, tg://, fb:// и т.д. -----
             if (scheme in externalSchemes) {
+                val intent = Intent(Intent.ACTION_VIEW, targetUri).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                return handleExternalIntent(context, intent)
+            }
+
+            if (scheme.isNotBlank() && scheme != "http" && scheme != "https") {
                 val intent = Intent(Intent.ACTION_VIEW, targetUri).apply {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
@@ -473,7 +523,57 @@ private fun createConfiguredWebView(
         }
 
         override fun onPermissionRequest(request: PermissionRequest?) {
-            request?.grant(request.resources)
+            val activity = context as? Activity
+            WebPermissionManager.handlePermissionRequest(activity, request)
+        }
+
+        override fun onJsAlert(
+            view: WebView?,
+            url: String?,
+            message: String?,
+            result: JsResult?
+        ): Boolean {
+            AlertDialog.Builder(context)
+                .setMessage(message)
+                .setPositiveButton(android.R.string.ok) { _, _ -> result?.confirm() }
+                .setOnCancelListener { result?.cancel() }
+                .show()
+            return true
+        }
+
+        override fun onJsConfirm(
+            view: WebView?,
+            url: String?,
+            message: String?,
+            result: JsResult?
+        ): Boolean {
+            AlertDialog.Builder(context)
+                .setMessage(message)
+                .setPositiveButton(android.R.string.ok) { _, _ -> result?.confirm() }
+                .setNegativeButton(android.R.string.cancel) { _, _ -> result?.cancel() }
+                .setOnCancelListener { result?.cancel() }
+                .show()
+            return true
+        }
+
+        override fun onJsPrompt(
+            view: WebView?,
+            url: String?,
+            message: String?,
+            defaultValue: String?,
+            result: JsPromptResult?
+        ): Boolean {
+            val input = EditText(context).apply { setText(defaultValue.orEmpty()) }
+            AlertDialog.Builder(context)
+                .setMessage(message)
+                .setView(input)
+                .setPositiveButton(android.R.string.ok) { _, _ ->
+                    result?.confirm(input.text.toString())
+                }
+                .setNegativeButton(android.R.string.cancel) { _, _ -> result?.cancel() }
+                .setOnCancelListener { result?.cancel() }
+                .show()
+            return true
         }
 
         override fun onShowFileChooser(
@@ -500,6 +600,8 @@ private fun createConfiguredWebView(
         }
     }
 
+    webView.setDownloadListener(createDownloadListener(context, userAgent))
+
     return webView
 }
 
@@ -513,6 +615,70 @@ private fun handleExternalIntent(context: Context, intent: Intent): Boolean {
         false
     } catch (_: Exception) {
         false
+    }
+}
+
+private const val WEB_PERMISSION_REQUEST_CODE = 1001
+
+object WebPermissionManager {
+    private var pendingRequest: PermissionRequest? = null
+    private var pendingResources: Array<String> = emptyArray()
+
+    fun handlePermissionRequest(activity: Activity?, request: PermissionRequest?) {
+        if (request == null) return
+        if (activity == null) {
+            request.deny()
+            return
+        }
+
+        val requestedResources = request.resources ?: run {
+            request.deny()
+            return
+        }
+        val requiredPermissions = mutableSetOf<String>()
+
+        if (requestedResources.contains(PermissionRequest.RESOURCE_VIDEO_CAPTURE)) {
+            requiredPermissions.add(Manifest.permission.CAMERA)
+        }
+        if (requestedResources.contains(PermissionRequest.RESOURCE_AUDIO_CAPTURE)) {
+            requiredPermissions.add(Manifest.permission.RECORD_AUDIO)
+        }
+
+        if (requiredPermissions.isEmpty()) {
+            request.grant(requestedResources)
+            return
+        }
+
+        val missingPermissions = requiredPermissions.filter {
+            ContextCompat.checkSelfPermission(activity, it) != PackageManager.PERMISSION_GRANTED
+        }
+
+        if (missingPermissions.isEmpty()) {
+            request.grant(requestedResources)
+        } else {
+            pendingRequest = request
+            pendingResources = requestedResources
+            ActivityCompat.requestPermissions(
+                activity,
+                missingPermissions.toTypedArray(),
+                WEB_PERMISSION_REQUEST_CODE
+            )
+        }
+    }
+
+    fun onRequestPermissionsResult(requestCode: Int, grantResults: IntArray) {
+        if (requestCode != WEB_PERMISSION_REQUEST_CODE) return
+        val request = pendingRequest ?: return
+        val allGranted = grantResults.all { it == PackageManager.PERMISSION_GRANTED }
+
+        if (allGranted) {
+            request.grant(pendingResources)
+        } else {
+            request.deny()
+        }
+
+        pendingRequest = null
+        pendingResources = emptyArray()
     }
 }
 

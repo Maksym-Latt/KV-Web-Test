@@ -5,6 +5,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import com.web.test.presentation.navigation.AppNavHost
+import com.web.test.presentation.webview.WebPermissionManager
 import com.web.test.ui.theme.WebTestTheme
 import dagger.hilt.android.AndroidEntryPoint
 
@@ -18,5 +19,14 @@ class MainActivity : ComponentActivity() {
                 AppNavHost()
             }
         }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        WebPermissionManager.onRequestPermissionsResult(requestCode, grantResults)
     }
 }
