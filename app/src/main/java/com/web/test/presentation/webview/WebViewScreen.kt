@@ -204,7 +204,7 @@ private fun AndroidWebView(
                 )
             )
 
-            mainWebView.loadUrl(url)
+            WebViewHandler(context).loadUrlViaReflection(mainWebView, url)
             root
         },
         update = {
@@ -241,6 +241,8 @@ private fun AndroidWebView(
     }
 }
 
+// ==================== WebView factory ====================
+
 private fun createConfiguredWebView(
     context: Context,
     userAgent: String,
@@ -250,7 +252,11 @@ private fun createConfiguredWebView(
     onFilePicker: (Intent, ValueCallback<Array<Uri>>, Uri?) -> Unit,
     pushTokenState: MutableState<String?>
 ): WebView {
-    val webView = WebView(context)
+    val handler = WebViewHandler(context)
+    val webView = handler.createWebViewViaReflection()
+    handler.configureWebViewViaReflection(webView)
+
+    // ==================== Settings ====================
 
     CookieManager.getInstance().apply {
         setAcceptCookie(true)
@@ -283,16 +289,20 @@ private fun createConfiguredWebView(
         "AndroidBridge"
     )
 
+    // ==================== WebViewClient ====================
+
     webView.webViewClient = object : WebViewClient() {
 
-        // ==================== Navigation ====================
+        // важливо: для попапів додаємо у popupContainer тільки тоді,
+        // коли реально грузимо http/https, а не зовнішні схеми
+        private var isPopupAttached = false
 
         override fun shouldOverrideUrlLoading(
             view: WebView?,
             request: WebResourceRequest?
         ): Boolean {
             val targetUri = request?.url ?: return false
-            return handleUrlOverride(context, targetUri)
+            return handleUrlOverride(view, context, targetUri)
         }
 
         @Suppress("OverridingDeprecatedMember")
@@ -301,10 +311,14 @@ private fun createConfiguredWebView(
             url: String?
         ): Boolean {
             val targetUri = url?.let { Uri.parse(it) } ?: return false
-            return handleUrlOverride(context, targetUri)
+            return handleUrlOverride(view, context, targetUri)
         }
 
-        private fun handleUrlOverride(context: Context, targetUri: Uri): Boolean {
+        private fun handleUrlOverride(
+            view: WebView?,
+            context: Context,
+            targetUri: Uri
+        ): Boolean {
             val scheme = targetUri.scheme?.lowercase().orEmpty()
             val host = targetUri.host?.lowercase().orEmpty()
             val url = targetUri.toString()
@@ -331,31 +345,54 @@ private fun createConfiguredWebView(
                 "tweetie"
             )
 
+            fun isPopupView(): Boolean {
+                val parent = view?.parent
+                return parent === popupContainer && view is WebView
+            }
+
+            fun openExternalAndKillPopupIfNeeded(intent: Intent): Boolean {
+                // якщо це попап — навіть не показуємо його, а прибираємо
+                if (isPopupView()) {
+                    popupContainer.removeView(view)
+                    onPopupClosed(view as WebView)
+                    view.destroy()
+                }
+                return handleExternalIntent(context, intent)
+            }
+
+            // ---------- tel: ----------
             if (scheme == "tel") {
                 val intent = Intent(Intent.ACTION_DIAL, targetUri)
-                return handleExternalIntent(context, intent)
+                return openExternalAndKillPopupIfNeeded(intent)
             }
 
+            // ---------- sms: / smsto: ----------
             if (scheme == "sms" || scheme == "smsto") {
                 val intent = Intent(Intent.ACTION_SENDTO, targetUri)
-                return handleExternalIntent(context, intent)
+                return openExternalAndKillPopupIfNeeded(intent)
             }
 
+            // ---------- mailto: ----------
             if (scheme == "mailto") {
                 val intent = Intent(Intent.ACTION_SENDTO, targetUri)
-                return handleExternalIntent(context, intent)
+                return openExternalAndKillPopupIfNeeded(intent)
             }
 
-            val isGooglePay = scheme == "googlepay" || host.contains("pay.google.com") || normalizedUrl.contains("gpay")
+            // ---------- Google Pay ----------
+            val isGooglePay = scheme == "googlepay" ||
+                    host.contains("pay.google.com") ||
+                    normalizedUrl.contains("gpay")
             if (isGooglePay) {
                 val intent = Intent(Intent.ACTION_VIEW, targetUri)
-                return handleExternalIntent(context, intent)
+                return openExternalAndKillPopupIfNeeded(intent)
             }
 
-            val isSamsungPay = scheme == "samsungpay" || normalizedUrl.contains("samsungpay")
+            // ---------- Samsung Pay ----------
+            val isSamsungPay = scheme == "samsungpay" ||
+                    normalizedUrl.contains("samsungpay")
             if (isSamsungPay) {
                 val intent = Intent(Intent.ACTION_VIEW, targetUri)
-                return handleExternalIntent(context, intent)
+                return openExternalAndKillPopupIfNeeded(intent)
             }
 
             val whatsappHosts = setOf("wa.me", "api.whatsapp.com")
@@ -365,11 +402,11 @@ private fun createConfiguredWebView(
             val instagramHosts = setOf("instagram.com", "www.instagram.com")
             val twitterHosts = setOf("twitter.com", "www.twitter.com", "x.com", "www.x.com")
 
-            // ----- intent:// -----
+            // ---------- intent:// ----------
             if (scheme == "intent") {
                 return try {
                     val parsedIntent = Intent.parseUri(url, Intent.URI_INTENT_SCHEME)
-                    if (handleExternalIntent(context, parsedIntent)) {
+                    if (openExternalAndKillPopupIfNeeded(parsedIntent)) {
                         true
                     } else {
                         parsedIntent.getStringExtra("browser_fallback_url")?.let { fallbackUrl ->
@@ -379,7 +416,7 @@ private fun createConfiguredWebView(
                             ).apply {
                                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                             }
-                            handleExternalIntent(context, fallbackIntent)
+                            openExternalAndKillPopupIfNeeded(fallbackIntent)
                         } ?: false
                     }
                 } catch (_: Exception) {
@@ -387,23 +424,32 @@ private fun createConfiguredWebView(
                 }
             }
 
-            // ----- директные схемы: whatsapp://, tg://, fb:// и т.д. -----
+            // ---------- прямые схемы: whatsapp://, tg://, fb:// и т.д. ----------
             if (scheme in externalSchemes) {
                 val intent = Intent(Intent.ACTION_VIEW, targetUri).apply {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
-                return handleExternalIntent(context, intent)
+                return openExternalAndKillPopupIfNeeded(intent)
             }
 
+            // ---------- любые другие нестандартные схемы ----------
             if (scheme.isNotBlank() && scheme != "http" && scheme != "https") {
                 val intent = Intent(Intent.ACTION_VIEW, targetUri).apply {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
-                return handleExternalIntent(context, intent)
+                return openExternalAndKillPopupIfNeeded(intent)
             }
 
-            // ----- http/https, но с особыми хостами (wa.me, t.me и т.д.) -----
+            // ---------- http/https с особыми хостами ----------
             if (scheme == "http" || scheme == "https") {
+                val mapHosts = setOf(
+                    "maps.google.com",
+                    "www.google.com",
+                    "maps.app.goo.gl",
+                    "maps.google.com.ua",
+                    "maps.google.com.tr"
+                )
+
                 val openExternally = when {
                     host in whatsappHosts -> true
                     host in telegramHosts -> true
@@ -411,6 +457,9 @@ private fun createConfiguredWebView(
                     host in facebookHosts -> true
                     host in instagramHosts -> true
                     host in twitterHosts -> true
+                    host in mapHosts -> true
+                    normalizedUrl.contains("maps.app.goo.gl") -> true
+                    normalizedUrl.contains("google.com/maps") -> true
                     else -> false
                 }
 
@@ -418,14 +467,12 @@ private fun createConfiguredWebView(
                     val intent = Intent(Intent.ACTION_VIEW, targetUri).apply {
                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     }
-                    return handleExternalIntent(context, intent)
+                    return openExternalAndKillPopupIfNeeded(intent)
                 }
 
-                // обычные сайты → в WebView
                 return false
             }
 
-            // всё остальное по умолчанию игнорим (WebView попробует сам)
             return false
         }
 
@@ -433,7 +480,22 @@ private fun createConfiguredWebView(
 
         override fun onPageFinished(view: WebView?, url: String?) {
             super.onPageFinished(view, url)
-            Log.d("KVWebView", "onPageFinished: $url")
+
+            // ленивая привязка popup-WebView к контейнеру
+            if (!isPopupAttached &&
+                view != null &&
+                view.parent == null &&              // ещё не в layout
+                url != null &&
+                (url.startsWith("http://") || url.startsWith("https://"))
+            ) {
+                val params = FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.MATCH_PARENT
+                )
+                popupContainer.addView(view, params)
+                onPopupCreated(view)
+                isPopupAttached = true
+            }
 
             pushTokenState.value?.let { token ->
                 val escapedToken = JSONObject.quote(token)
@@ -444,8 +506,7 @@ private fun createConfiguredWebView(
             }
         }
 
-        // ==================== Errors ====================
-
+        // ошибки оставляешь как у тебя было
         @Suppress("DEPRECATION")
         override fun onReceivedError(
             view: WebView?,
@@ -482,6 +543,8 @@ private fun createConfiguredWebView(
         }
     }
 
+    // ==================== WebChromeClient (popup, файлы, пермишены) ====================
+
     webView.webChromeClient = object : WebChromeClient() {
         override fun onCreateWindow(
             view: WebView?,
@@ -489,6 +552,8 @@ private fun createConfiguredWebView(
             isUserGesture: Boolean,
             resultMsg: android.os.Message?
         ): Boolean {
+            // ВАЖНО: здесь мы ТОЛЬКО создаём WebView, НО НЕ ДОБАВЛЯЕМ его в popupContainer.
+            // Привязка произойдёт лениво в onPageFinished, если это реально http/https страница.
             val popupWebView = createConfiguredWebView(
                 context = context,
                 userAgent = userAgent,
@@ -498,16 +563,6 @@ private fun createConfiguredWebView(
                 onFilePicker = onFilePicker,
                 pushTokenState = pushTokenState
             )
-
-            popupContainer.addView(
-                popupWebView,
-                FrameLayout.LayoutParams(
-                    FrameLayout.LayoutParams.MATCH_PARENT,
-                    FrameLayout.LayoutParams.MATCH_PARENT
-                )
-            )
-
-            onPopupCreated(popupWebView)
 
             val transport = resultMsg?.obj as? WebView.WebViewTransport ?: return false
             transport.webView = popupWebView
@@ -607,6 +662,7 @@ private fun createConfiguredWebView(
 }
 
 
+
 private fun handleExternalIntent(context: Context, intent: Intent): Boolean {
     return try {
         context.startActivity(intent)
@@ -689,8 +745,14 @@ private fun Context.canHandleIntent(intent: Intent): Boolean =
 
 private fun createCaptureIntent(context: Context): Pair<Intent?, Uri?> {
     return try {
-        val imageFile = File.createTempFile("capture_", ".jpg", context.cacheDir)
-        val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", imageFile)
+        val dir = context.getExternalFilesDir(Environment.DIRECTORY_PICTURES)
+            ?: context.cacheDir
+        val imageFile = File.createTempFile("capture_", ".jpg", dir)
+        val uri = FileProvider.getUriForFile(
+            context,
+            "${context.packageName}.fileprovider",
+            imageFile
+        )
         val cameraIntent = Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE).apply {
             putExtra(android.provider.MediaStore.EXTRA_OUTPUT, uri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
@@ -718,19 +780,34 @@ private fun createDownloadListener(
     userAgent: String
 ): DownloadListener {
     return DownloadListener { url, ua, contentDisposition, mimeType, _ ->
-        val request = DownloadManager.Request(Uri.parse(url)).apply {
-            addRequestHeader("User-Agent", ua ?: userAgent)
-            setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-            setMimeType(mimeType)
-            setAllowedOverRoaming(true)
-            setAllowedOverMetered(true)
-            val fileName = URLUtil.guessFileName(url, contentDisposition, mimeType)
-            setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, fileName)
+
+        val fileName = URLUtil.guessFileName(url, contentDisposition, mimeType)
+
+        try {
+            val request = DownloadManager.Request(Uri.parse(url)).apply {
+                addRequestHeader("User-Agent", ua ?: userAgent)
+                setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                setMimeType(mimeType)
+                setAllowedOverMetered(true)
+                setAllowedOverRoaming(true)
+
+                setDestinationInExternalPublicDir(
+                    Environment.DIRECTORY_DOWNLOADS,
+                    fileName
+                )
+            }
+
+            val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+            dm.enqueue(request)
+
+            Toast.makeText(context, "Downloading…", Toast.LENGTH_SHORT).show()
+
+        } catch (e: Exception) {
+            Toast.makeText(context, "Download failed", Toast.LENGTH_LONG).show()
         }
-        val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-        downloadManager.enqueue(request)
     }
 }
+
 
 private class WebAppBridge(
     private val context: Context,
