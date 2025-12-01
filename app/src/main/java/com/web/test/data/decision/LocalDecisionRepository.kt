@@ -15,7 +15,7 @@ class LocalDecisionRepository @Inject constructor() : DecisionRepository {
         return if (suspicious) {
             DecisionResult(
                 isModerator = false,
-                targetUrl = getTestUrl("TESTING"),
+                targetUrl = getTestUrl("GOOGLE"),
                 reason = "Suspicious environment"
             )
         } else {

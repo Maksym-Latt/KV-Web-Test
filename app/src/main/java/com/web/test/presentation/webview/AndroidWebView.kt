@@ -30,7 +30,6 @@ internal fun AndroidWebView(
     onFilePicker: (Intent, ValueCallback<Array<Uri>>, Uri?) -> Unit
 ) {
     val context = LocalContext.current
-    val activity = context as? Activity
 
     val customUserAgent = remember {
         WebSettings.getDefaultUserAgent(context).replace("wv", "") + " KVWebTest/1.0"
@@ -39,7 +38,6 @@ internal fun AndroidWebView(
     val lifecycleOwner = LocalLifecycleOwner.current
     val mainWebViewState = remember { mutableStateOf<WebView?>(null) }
     val popupWebViewState = remember { mutableStateOf<WebView?>(null) }
-    val pushTokenState = remember { mutableStateOf(loadStoredPushToken(context)) }
     var showExitDialog by remember { mutableStateOf(false) }
 
     BackHandler(enabled = true) {
@@ -62,21 +60,6 @@ internal fun AndroidWebView(
         }
     }
 
-    if (showExitDialog) {
-        AlertDialog.Builder(context)
-            .setTitle("Exit")
-            .setMessage("Do you want to exit the app?")
-            .setPositiveButton("Exit") { _, _ ->
-                activity?.finish()
-            }
-            .setNegativeButton("Stay") { dialog, _ ->
-                dialog.dismiss()
-            }
-            .setOnDismissListener { showExitDialog = false }
-            .show()
-    }
-
-
     AndroidView(
         modifier = Modifier.fillMaxSize(),
         factory = {
@@ -92,8 +75,7 @@ internal fun AndroidWebView(
                     popupContainer.removeView(popup)
                     popupWebViewState.value = null
                 },
-                onFilePicker = onFilePicker,
-                pushTokenState = pushTokenState
+                onFilePicker = onFilePicker
             )
 
             mainWebViewState.value = mainWebView

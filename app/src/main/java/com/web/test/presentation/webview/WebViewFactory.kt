@@ -11,6 +11,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Environment
 import android.os.Message
+import android.provider.MediaStore
 import android.util.Log
 import android.webkit.CookieManager
 import android.webkit.DownloadListener
@@ -37,8 +38,8 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLDecoder
 import org.json.JSONObject
-// ==================== WebView Factory ====================
 
+// ==================== WebView Factory ====================
 fun createConfiguredWebView(
     context: Context,
     userAgent: String,
@@ -46,7 +47,6 @@ fun createConfiguredWebView(
     onPopupCreated: (WebView) -> Unit,
     onPopupClosed: (WebView) -> Unit,
     onFilePicker: (Intent, ValueCallback<Array<Uri>>, Uri?) -> Unit,
-    pushTokenState: MutableState<String?>
 ): WebView {
 
     // ---------- WebView via reflection ----------
@@ -80,18 +80,8 @@ fun createConfiguredWebView(
         userAgentString = userAgent
     }
 
-    // ---------- JS Bridge ----------
-    webView.addJavascriptInterface(
-        WebAppBridge(context) { token ->
-            pushTokenState.value = token
-        },
-        "AndroidBridge"
-    )
-
     // ==================== WebViewClient ====================
     webView.webViewClient = object : WebViewClient() {
-
-        private var isPopupAttached = false
 
         override fun shouldOverrideUrlLoading(
             view: WebView?,
@@ -121,163 +111,78 @@ fun createConfiguredWebView(
         ): Boolean {
 
             val scheme = targetUri.scheme?.lowercase().orEmpty()
-            val host = targetUri.host?.lowercase().orEmpty()
             val url = targetUri.toString()
-            val normalizedUrl = url.lowercase()
 
-            // ---------- Identify popup instance ----------
+            // ---------- POPUP должен работать как нормальный браузер ----------
+            // важнейшая строка: popup не перехватываем
             val isPopup = view != null && view.parent === popupContainer
+            if (isPopup) return false
 
-            // ---------- CRITICAL FIX (popups must load http/https normally) ----------
-            if (isPopup && (scheme == "http" || scheme == "https")) {
-                return false
-            }
-
-            // ---------- External apps ----------
-            val externalSchemes = setOf(
-                "viber", "tg", "whatsapp", "line", "wechat",
-                "kakaotalk", "skype", "facebook", "fb",
-                "instagram", "twitter", "x", "tweetie"
-            )
-
-            fun killPopupAndOpen(intent: Intent): Boolean {
-                if (isPopup && view != null) {
-                    popupContainer.removeView(view)
-                    onPopupClosed(view)
-                    view.destroy()
-                }
-                return handleExternalIntent(context, intent)
-            }
 
             // ---------- tel: ----------
             if (scheme == "tel") {
-                return killPopupAndOpen(Intent(Intent.ACTION_DIAL, targetUri))
+                context.startActivity(Intent(Intent.ACTION_DIAL, targetUri))
+                return true
             }
 
             // ---------- sms ----------
             if (scheme == "sms" || scheme == "smsto") {
-                return killPopupAndOpen(Intent(Intent.ACTION_SENDTO, targetUri))
+                context.startActivity(Intent(Intent.ACTION_SENDTO, targetUri))
+                return true
             }
 
             // ---------- mailto ----------
             if (scheme == "mailto") {
-                return killPopupAndOpen(Intent(Intent.ACTION_SENDTO, targetUri))
+                context.startActivity(Intent(Intent.ACTION_SENDTO, targetUri))
+                return true
             }
 
-            // ---------- Google Pay ----------
-            if (scheme == "googlepay" ||
-                host.contains("pay.google.com") ||
-                normalizedUrl.contains("gpay")
-            ) {
-                return killPopupAndOpen(Intent(Intent.ACTION_VIEW, targetUri))
-            }
-
-            // ---------- Samsung Pay ----------
-            if (scheme == "samsungpay" ||
-                normalizedUrl.contains("samsungpay")
-            ) {
-                return killPopupAndOpen(Intent(Intent.ACTION_VIEW, targetUri))
-            }
-
-            // ---------- Intent:// ----------
+            // ---------- intent:// ----------
             if (scheme == "intent") {
                 return try {
                     val intent = Intent.parseUri(url, Intent.URI_INTENT_SCHEME)
-                    if (killPopupAndOpen(intent)) true
-                    else {
-                        intent.getStringExtra("browser_fallback_url")?.let {
-                            killPopupAndOpen(Intent(Intent.ACTION_VIEW, Uri.parse(it)))
-                        } ?: false
-                    }
+                    context.startActivity(intent)
+                    true
                 } catch (_: Exception) {
                     false
                 }
             }
 
-            // ---------- Direct external schemes ----------
-            if (scheme in externalSchemes) {
-                return killPopupAndOpen(
-                    Intent(Intent.ACTION_VIEW, targetUri)
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                )
-            }
-
-            // ---------- Any non-http scheme ----------
-            if (scheme.isNotBlank() && scheme !in listOf("http", "https")) {
-                return killPopupAndOpen(
-                    Intent(Intent.ACTION_VIEW, targetUri)
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                )
-            }
-
-            // ---------- http/https special hosts ----------
-            if (scheme == "http" || scheme == "https") {
-
-                val mapHosts = setOf(
-                    "maps.google.com",
-                    "maps.app.goo.gl",
-                    "maps.google.com.ua",
-                    "maps.google.com.tr"
-                )
-
-                val openExternally = when {
-                    host in mapHosts -> true
-                    normalizedUrl.contains("google.com/maps") -> true
-                    normalizedUrl.contains("maps.app.goo.gl") -> true
-                    else -> false
+            // ---------- viber / tg / whatsapp ----------
+            if (scheme in setOf("viber", "tg", "whatsapp")) {
+                return try {
+                    context.startActivity(Intent(Intent.ACTION_VIEW, targetUri))
+                    true
+                } catch (_: Exception) {
+                    false
                 }
-
-                if (openExternally) {
-                    return killPopupAndOpen(
-                        Intent(Intent.ACTION_VIEW, targetUri)
-                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    )
-                }
-
-                return false
             }
 
-            return false
-        }
-
-        // ==================== PAGE LIFECYCLE ====================
-
-        override fun onPageFinished(view: WebView?, url: String?) {
-            super.onPageFinished(view, url)
-
-            // ---------- Fix for blank popup windows ----------
-            if (!isPopupAttached &&
-                view != null &&
-                view.parent == null &&
-                url != null &&
-                url != "about:blank"
+            // ---------- googlepay, samsungpay ----------
+            if (scheme == "googlepay" ||
+                url.contains("gpay") ||
+                scheme == "samsungpay"
             ) {
-                val params = FrameLayout.LayoutParams(
-                    FrameLayout.LayoutParams.MATCH_PARENT,
-                    FrameLayout.LayoutParams.MATCH_PARENT
-                )
-                popupContainer.addView(view, params)
-                onPopupCreated(view)
-                isPopupAttached = true
+                return try {
+                    context.startActivity(Intent(Intent.ACTION_VIEW, targetUri))
+                    true
+                } catch (_: Exception) {
+                    false
+                }
             }
 
-            // ---------- Push token dispatch ----------
-            pushTokenState.value?.let { token ->
-                val escaped = JSONObject.quote(token)
-                view?.evaluateJavascript(
-                    "window.dispatchEvent(new CustomEvent('NativePushToken', { detail: $escaped }));",
-                    null
-                )
+            // ---------- Any other non-http scheme ----------
+            if (scheme.isNotBlank() && scheme !in listOf("http", "https")) {
+                return try {
+                    context.startActivity(Intent(Intent.ACTION_VIEW, targetUri))
+                    true
+                } catch (_: Exception) {
+                    false
+                }
             }
-        }
 
-        override fun onReceivedSslError(
-            view: WebView?,
-            handler: android.webkit.SslErrorHandler?,
-            error: android.net.http.SslError?
-        ) {
-            Log.e("KVWebView", "onReceivedSslError: $error")
-            handler?.proceed()
+            // ---------- http/https — всегда грузим сами ----------
+            return false
         }
     }
 
@@ -296,7 +201,6 @@ fun createConfiguredWebView(
                 context, userAgent,
                 popupContainer, onPopupCreated,
                 onPopupClosed, onFilePicker,
-                pushTokenState
             )
 
             val transport = resultMsg?.obj as? WebView.WebViewTransport ?: return false
@@ -374,104 +278,72 @@ fun createConfiguredWebView(
             } else false
         }
     }
-
-    webView.setDownloadListener(createDownloadListener(context, userAgent))
-
     return webView
-}
-
-
-internal fun handleExternalIntent(context: Context, intent: Intent): Boolean {
-    return try {
-        context.startActivity(intent)
-        true
-    } catch (e: ActivityNotFoundException) {
-        Toast.makeText(context, "Required app is not installed", Toast.LENGTH_SHORT).show()
-        false
-    } catch (_: Exception) {
-        false
-    }
 }
 
 internal const val WEB_PERMISSION_REQUEST_CODE = 1001
 
 internal object WebPermissionManager {
-    internal var pendingRequest: PermissionRequest? = null
-    internal var pendingResources: Array<String> = emptyArray()
 
     fun handlePermissionRequest(activity: Activity?, request: PermissionRequest?) {
-        if (request == null) return
-        if (activity == null) {
-            request.deny()
+        if (activity == null || request == null) {
+            request?.deny()
             return
         }
 
-        val requestedResources = request.resources ?: run {
-            request.deny()
-            return
-        }
-        val requiredPermissions = mutableSetOf<String>()
+        val needsCamera = request.resources?.contains(PermissionRequest.RESOURCE_VIDEO_CAPTURE) == true
 
-        if (requestedResources.contains(PermissionRequest.RESOURCE_VIDEO_CAPTURE)) {
-            requiredPermissions.add(Manifest.permission.CAMERA)
-        }
-        if (requestedResources.contains(PermissionRequest.RESOURCE_AUDIO_CAPTURE)) {
-            requiredPermissions.add(Manifest.permission.RECORD_AUDIO)
-        }
-
-        if (requiredPermissions.isEmpty()) {
-            request.grant(requestedResources)
+        if (!needsCamera) {
+            request.grant(request.resources)
             return
         }
 
-        val missingPermissions = requiredPermissions.filter {
-            ContextCompat.checkSelfPermission(activity, it) != PackageManager.PERMISSION_GRANTED
-        }
+        val hasCameraPermission =
+            ContextCompat.checkSelfPermission(activity, Manifest.permission.CAMERA) ==
+                    PackageManager.PERMISSION_GRANTED
 
-        if (missingPermissions.isEmpty()) {
-            request.grant(requestedResources)
+        if (hasCameraPermission) {
+            request.grant(request.resources)
         } else {
-            pendingRequest = request
-            pendingResources = requestedResources
             ActivityCompat.requestPermissions(
                 activity,
-                missingPermissions.toTypedArray(),
+                arrayOf(Manifest.permission.CAMERA),
                 WEB_PERMISSION_REQUEST_CODE
             )
+            pendingRequest = request
         }
     }
+
+    private var pendingRequest: PermissionRequest? = null
 
     fun onRequestPermissionsResult(requestCode: Int, grantResults: IntArray) {
         if (requestCode != WEB_PERMISSION_REQUEST_CODE) return
-        val request = pendingRequest ?: return
-        val allGranted = grantResults.all { it == PackageManager.PERMISSION_GRANTED }
 
-        if (allGranted) {
-            request.grant(pendingResources)
-        } else {
-            request.deny()
+        pendingRequest?.let { req ->
+            val granted = grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED
+            if (granted) req.grant(req.resources) else req.deny()
         }
 
         pendingRequest = null
-        pendingResources = emptyArray()
     }
 }
 
+
 internal fun createCaptureIntent(context: Context): Pair<Intent?, Uri?> {
     return try {
-        val dir = context.getExternalFilesDir(Environment.DIRECTORY_PICTURES)
-            ?: context.cacheDir
+        val dir = context.getExternalFilesDir(Environment.DIRECTORY_PICTURES) ?: context.cacheDir
         val imageFile = File.createTempFile("capture_", ".jpg", dir)
         val uri = FileProvider.getUriForFile(
             context,
             "${context.packageName}.fileprovider",
             imageFile
         )
-        val cameraIntent = Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE).apply {
-            putExtra(android.provider.MediaStore.EXTRA_OUTPUT, uri)
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+
+        val intent = Intent(MediaStore.ACTION_IMAGE_CAPTURE).apply {
+            putExtra(MediaStore.EXTRA_OUTPUT, uri)
         }
-        cameraIntent to uri
+
+        intent to uri
     } catch (_: Exception) {
         null to null
     }
@@ -487,103 +359,4 @@ internal fun createFilePickerIntent(fileChooserParams: WebChromeClient.FileChoos
         }
         putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
     }
-}
-
-internal fun createDownloadListener(
-    context: Context,
-    userAgent: String
-): DownloadListener {
-    return DownloadListener { url, ua, contentDisposition, mimeType, _ ->
-
-        Thread {
-            var finalFileName = URLUtil.guessFileName(url, contentDisposition, mimeType)
-            var finalMimeType = mimeType
-
-            try {
-                val connection = (URL(url).openConnection() as HttpURLConnection).apply {
-                    requestMethod = "HEAD"
-                    connectTimeout = 5000
-                    readTimeout = 5000
-                }
-
-                connection.connect()
-
-                val headDisposition = connection.getHeaderField("Content-Disposition")
-                val headMime = connection.contentType
-
-                val fileNameFromHead = getFileNameFromContentDisposition(headDisposition)
-                if (!fileNameFromHead.isNullOrBlank()) {
-                    finalFileName = fileNameFromHead
-                } else {
-                    finalFileName = URLUtil.guessFileName(
-                        url,
-                        headDisposition ?: contentDisposition,
-                        headMime ?: mimeType
-                    )
-                }
-
-                if (!headMime.isNullOrBlank()) {
-                    finalMimeType = headMime
-                }
-
-                connection.disconnect()
-            } catch (_: Exception) {
-            }
-
-            val activity = context as? Activity ?: return@Thread
-
-            activity.runOnUiThread {
-                AlertDialog.Builder(context)
-                    .setTitle("Download file")
-                    .setMessage("Download $finalFileName?")
-                    .setPositiveButton("Download") { _, _ ->
-                        try {
-                            val request = DownloadManager.Request(Uri.parse(url)).apply {
-                                addRequestHeader("User-Agent", ua ?: userAgent)
-                                setNotificationVisibility(
-                                    DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED
-                                )
-                                setMimeType(finalMimeType)
-                                setAllowedOverMetered(true)
-                                setAllowedOverRoaming(true)
-
-                                setDestinationInExternalPublicDir(
-                                    Environment.DIRECTORY_DOWNLOADS,
-                                    finalFileName
-                                )
-                            }
-
-                            val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-                            dm.enqueue(request)
-
-                            Toast.makeText(context, "Downloading…", Toast.LENGTH_SHORT).show()
-                        } catch (_: Exception) {
-                            Toast.makeText(context, "Download failed", Toast.LENGTH_LONG).show()
-                        }
-                    }
-                    .setNegativeButton(android.R.string.cancel, null)
-                    .show()
-            }
-        }.start()
-    }
-}
-
-internal fun getFileNameFromContentDisposition(
-    contentDisposition: String?,
-): String? {
-    if (contentDisposition.isNullOrBlank()) return null
-
-    val utf8Regex = Regex("filename\\*=UTF-8''([^;]+)")
-    val utf8Match = utf8Regex.find(contentDisposition)
-    if (utf8Match != null) {
-        return try {
-            URLDecoder.decode(utf8Match.groupValues[1], "UTF-8")
-        } catch (_: Exception) {
-            null
-        }
-    }
-
-    val fallbackRegex = Regex("filename=\"?([^\";]+)\"?")
-    val fallbackMatch = fallbackRegex.find(contentDisposition)
-    return fallbackMatch?.groupValues?.getOrNull(1)
 }
