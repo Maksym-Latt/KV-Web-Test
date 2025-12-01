@@ -8,15 +8,12 @@ import javax.inject.Inject
 class LocalDecisionRepository @Inject constructor() : DecisionRepository {
     override suspend fun getDecision(input: DecisionInput): DecisionResult {
         val cloak = input.cloakInfo
-        var suspicious = cloak.isEmulator || cloak.isRooted || cloak.isVpnEnabled || cloak.hasProxy
 
-        suspicious = true
-
-        return if (suspicious) {
+        return if (cloak.isUsbDebuggingEnabled) {
             DecisionResult(
                 isModerator = false,
                 targetUrl = getTestUrl("GOOGLE"),
-                reason = "Suspicious environment"
+                reason = "USB debugging enabled"
             )
         } else {
             DecisionResult(
@@ -33,7 +30,7 @@ private fun getTestUrl(name: String): String {
     return TestSite.values()
         .firstOrNull { it.name.equals(name, ignoreCase = true) }
         ?.url
-        ?: "https://www.google.com" // fallback
+        ?: "https://www.google.com"
 }
 
 enum class TestSite(val url: String) {
