@@ -1,6 +1,7 @@
 package com.web.test.presentation.webview
 
 import android.content.Context
+import android.webkit.CookieManager
 import android.webkit.WebSettings
 import android.webkit.WebView
 
@@ -55,6 +56,8 @@ class WebViewHandler(
 
     fun loadUrlViaReflection(webView: WebView, url: String) {
         try {
+            CookieManager.getInstance().flush()
+
             val method = WebView::class.java.getMethod("loadUrl", String::class.java)
             method.invoke(webView, url)
         } catch (_: Throwable) {

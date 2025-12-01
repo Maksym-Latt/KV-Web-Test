@@ -55,10 +55,10 @@ fun createConfiguredWebView(
     handler.configureWebViewViaReflection(webView)
 
     // ---------- Cookies ----------
-    CookieManager.getInstance().apply {
-        setAcceptCookie(true)
-        setAcceptThirdPartyCookies(webView, true)
-    }
+    val cookieManager = CookieManager.getInstance()
+    cookieManager.setAcceptCookie(true)
+    cookieManager.setAcceptThirdPartyCookies(webView, true)
+    cookieManager.flush()
 
     // ---------- Settings ----------
     with(webView.settings) {
