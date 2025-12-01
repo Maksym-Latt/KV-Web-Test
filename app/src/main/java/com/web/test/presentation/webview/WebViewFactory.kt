@@ -113,11 +113,7 @@ fun createConfiguredWebView(
             val scheme = targetUri.scheme?.lowercase().orEmpty()
             val url = targetUri.toString()
 
-            // ---------- POPUP должен работать как нормальный браузер ----------
-            // важнейшая строка: popup не перехватываем
-            val isPopup = view != null && view.parent === popupContainer
-            if (isPopup) return false
-
+            if (view?.tag == "popup") return false
 
             // ---------- tel: ----------
             if (scheme == "tel") {
@@ -141,8 +137,24 @@ fun createConfiguredWebView(
             if (scheme == "intent") {
                 return try {
                     val intent = Intent.parseUri(url, Intent.URI_INTENT_SCHEME)
+
                     context.startActivity(intent)
                     true
+
+                } catch (_: ActivityNotFoundException) {
+                    val fallbackUrl = try {
+                        Intent.parseUri(url, Intent.URI_INTENT_SCHEME)
+                            .getStringExtra("browser_fallback_url")
+                    } catch (_: Exception) {
+                        null
+                    }
+
+                    if (fallbackUrl != null) {
+                        (view as? WebView)?.loadUrl(fallbackUrl)
+                        return true
+                    }
+
+                    false
                 } catch (_: Exception) {
                     false
                 }
@@ -181,7 +193,8 @@ fun createConfiguredWebView(
                 }
             }
 
-            // ---------- http/https — всегда грузим сами ----------
+
+            // --- 6. Обычные сайты грузим в WebView ---
             return false
         }
     }
@@ -201,7 +214,16 @@ fun createConfiguredWebView(
                 context, userAgent,
                 popupContainer, onPopupCreated,
                 onPopupClosed, onFilePicker,
+            ).apply { tag = "popup" }
+
+            popupContainer.addView(
+                popupWebView,
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.MATCH_PARENT
+                )
             )
+            onPopupCreated(popupWebView)
 
             val transport = resultMsg?.obj as? WebView.WebViewTransport ?: return false
             transport.webView = popupWebView
